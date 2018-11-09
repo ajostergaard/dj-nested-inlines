@@ -1,7 +1,9 @@
 from django import VERSION as DJANGO_VERSION
 from django.contrib.admin.options import (ModelAdmin, InlineModelAdmin,
     csrf_protect_m, models, transaction, all_valid,
-    PermissionDenied, unquote, escape, Http404, reverse)
+    PermissionDenied, unquote, reverse)
+from django.http import Http404
+from django.utils.html import escape
 # Fix to make Django 1.5 compatible, maintain backwards compatibility
 try:
     from django.contrib.admin.options import force_unicode
@@ -10,6 +12,7 @@ except ImportError:
 
 from django.contrib.admin.helpers import InlineAdminFormSet, AdminForm
 from django.utils.translation import ugettext as _
+from django.forms.widgets import Media
 
 from nested_inlines.forms import BaseNestedModelForm, BaseNestedInlineFormSet
 from nested_inlines.helpers import AdminErrorList
@@ -21,33 +24,33 @@ class NestedModelAdmin(ModelAdmin):
     class Media:
         css = {'all': ('admin/css/nested.css',)}
         js = ('admin/js/inlines.js',)
-        
+
     def get_form(self, request, obj=None, **kwargs):
         if not issubclass(self.form, BaseNestedModelForm):
             raise ValueError('self.form must to be an instance of BaseNestedModelForm')
         return super(NestedModelAdmin, self).get_form(request, obj, **kwargs)
-        
+
     def get_inline_instances(self, request, obj=None):
         inline_instances = []
         for inline_class in self.inlines:
             inline = inline_class(self.model, self.admin_site)
             if request:
-                if not (inline.has_add_permission(request) or
+                if not (inline.has_add_permission(request, obj) or
                         inline.has_change_permission(request, obj) or
                         inline.has_delete_permission(request, obj)):
                     continue
-                if not inline.has_add_permission(request):
+                if not inline.has_add_permission(request, obj):
                     inline.max_num = 0
             inline_instances.append(inline)
 
         return inline_instances
-    
+
     def save_formset(self, request, form, formset, change):
         """
         Given an inline formset save it to the database.
         """
         formset.save()
-        
+
         #iterate through the nested formsets and save them
         #skip formsets, where the parent is marked for deletion
         if formset.can_delete:
@@ -58,7 +61,7 @@ class NestedModelAdmin(ModelAdmin):
             if hasattr(form, 'nested_formsets') and form not in deleted_forms:
                 for nested_formset in form.nested_formsets:
                     self.save_formset(request, form, nested_formset, change)
-                    
+
     def add_nested_inline_formsets(self, request, inline, formset, depth=0):
         if depth > 5:
             raise Exception("Maximum nesting depth reached (5)")
@@ -67,7 +70,7 @@ class NestedModelAdmin(ModelAdmin):
             for nested_inline in inline.get_inline_instances(request):
                 InlineFormSet = nested_inline.get_formset(request, form.instance)
                 prefix = "%s-%s" % (form.prefix, InlineFormSet.get_default_prefix())
-                
+
                 #because of form nesting with extra=0 it might happen, that the post data doesn't include values for the formset.
                 #This would lead to a Exception, because the ManagementForm construction fails. So we check if there is data available, and otherwise create an empty form
                 keys = request.POST.keys()
@@ -84,18 +87,18 @@ class NestedModelAdmin(ModelAdmin):
                 if nested_inline.inlines:
                     self.add_nested_inline_formsets(request, nested_inline, nested_formset, depth=depth+1)
             form.nested_formsets = nested_formsets
-            
+
     def wrap_nested_inline_formsets(self, request, inline, formset):
         """wraps each formset in a helpers.InlineAdminFormset.
         @TODO someone with more inside knowledge should write done why this is done
         """
-        media = None
+        media = Media()
         def get_media(extra_media):
             if media:
                 return media + extra_media
             else:
                 return extra_media
-                        
+
         for form in formset.forms:
             wrapped_nested_formsets = []
             for nested_inline, nested_formset in zip(inline.get_inline_instances(request), form.nested_formsets):
@@ -114,7 +117,7 @@ class NestedModelAdmin(ModelAdmin):
                     media = get_media(self.wrap_nested_inline_formsets(request, nested_inline, nested_formset))
             form.nested_formsets = wrapped_nested_formsets
         return media
-    
+
     def all_valid_with_nesting(self, formsets):
         """Recursively validate all nested formsets
         """
@@ -128,7 +131,7 @@ class NestedModelAdmin(ModelAdmin):
                     if not self.all_valid_with_nesting(form.nested_formsets):
                         return False
         return True
-    
+
     @csrf_protect_m
     @transaction.atomic
     def add_view(self, request, form_url='', extra_context=None):
@@ -349,22 +352,22 @@ class NestedInlineModelAdmin(InlineModelAdmin):
         for inline_class in self.inlines:
             inline = inline_class(self.model, self.admin_site)
             if request:
-                if not (inline.has_add_permission(request) or
+                if not (inline.has_add_permission(request, obj) or
                         inline.has_change_permission(request, obj) or
                         inline.has_delete_permission(request, obj)):
                     continue
-                if not inline.has_add_permission(request):
+                if not inline.has_add_permission(request, obj):
                     inline.max_num = 0
             inline_instances.append(inline)
 
         return inline_instances
-    
+
     def get_formsets(self, request, obj=None):
         for inline in self.get_inline_instances(request, obj):
             yield inline.get_formset(request, obj)
 
 class NestedStackedInline(NestedInlineModelAdmin):
     template = 'admin/edit_inline/stacked.html'
-    
+
 class NestedTabularInline(NestedInlineModelAdmin):
     template = 'admin/edit_inline/tabular.html'
